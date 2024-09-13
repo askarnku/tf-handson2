@@ -89,3 +89,85 @@ module "private_rt_assoc" {
   route_table_id = module.private_rt.id
 }
 
+#sg for alb
+resource "aws_security_group" "alb-sg" {
+  name        = "alb-sg"
+  description = "Allow http"
+  vpc_id      = module.vpc.id
+
+  ingress {
+    description = "http from the world"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description = "https from the world"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "alb-sg"
+  }
+}
+
+resource "aws_security_group" "public_ec2_sg" {
+  name        = "alb_sg"
+  description = "allow http and https traffic everywhere"
+  vpc_id      = module.vpc.id
+
+  ingress {
+    description = "ssh from the world"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    description     = "http from the ALB"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb-sg.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "sg_ec2_public"
+  }
+}
+
+module "ec2" {
+  source = "./modules/ec2"
+
+  public_subnet_ids = module.subnets.public_subnet_ids
+  public_ec2_sg     = [aws_security_group.public_ec2_sg.id]
+  user_data         = <<EOT
+    #!/bin/bash
+    yum update -y
+    yum install httpd -y
+    systemctl start httpd
+    systemctl enable httpd
+    echo "<h1>Hello from $(hostname -f)</h1>" > /var/www/html/index.html
+EOT
+}
+
