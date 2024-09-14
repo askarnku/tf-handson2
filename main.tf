@@ -156,12 +156,24 @@ resource "aws_security_group" "public_ec2_sg" {
   }
 }
 
+#look up ami
+data "aws_ami" "amz-linux-2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-2.0.*-x86_64-gp2"]
+  }
+}
+
 module "ec2" {
   source = "./modules/ec2"
 
-  public_subnet_ids = module.subnets.public_subnet_ids
-  public_ec2_sg     = [aws_security_group.public_ec2_sg.id]
-  user_data         = <<EOT
+  public_subnet_ids  = module.subnets.public_subnet_ids
+  security_group_ids = [aws_security_group.public_ec2_sg.id]
+  ami_name           = "ami-0182f373e66f89c85"
+  user_data          = <<EOT
     #!/bin/bash
     yum update -y
     yum install httpd -y
@@ -170,4 +182,69 @@ module "ec2" {
     echo "<h1>Hello from $(hostname -f)</h1>" > /var/www/html/index.html
 EOT
 }
+
+module "aws_certs" {
+  source = "./modules/aws_certs"
+
+  domain_name     = "routeplanning.net"
+  alt_name_domain = ["*.routeplanning.net"]
+  cert_tag        = "hands_on_cert_tag"
+  zone_id         = data.aws_route53_zone.my_hosted_zone.zone_id
+}
+
+#lookup my hosted zone
+data "aws_route53_zone" "my_hosted_zone" {
+  name         = "routeplanning.net"
+  private_zone = false
+}
+
+module "tg_public" {
+  source = "./modules/tg"
+
+  name     = "tg-public"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = module.vpc.id
+  tg_tag   = "tg_public_tag"
+}
+
+resource "aws_lb_target_group_attachment" "ec2_1a" {
+  target_group_arn = module.tg_public.arn
+  target_id        = module.ec2.ec2_ids[0]
+}
+
+resource "aws_lb_target_group_attachment" "ec2_1b" {
+  target_group_arn = module.tg_public.arn
+  target_id        = module.ec2.ec2_ids[1]
+}
+
+module "alb" {
+  source = "./modules/alb"
+
+  name            = "alb"
+  internal        = false
+  lb_type         = "application"
+  security_groups = [aws_security_group.alb-sg.id]
+
+  subnets         = module.subnets.public_subnet_ids
+  alb_tag         = "alb"
+  certificate_arn = module.aws_certs.arn
+  tg_arn          = module.tg_public.arn
+  depends_on      = [module.aws_certs]
+
+}
+
+module "my_cname_record" {
+  source = "./modules/route53"
+
+  zone_id = data.aws_route53_zone.my_hosted_zone.zone_id
+  name    = "handson.routeplanning.net"
+  type    = "CNAME"
+  ttl     = 60
+  records = [module.alb.dns_name]
+}
+
+
+
+
 
